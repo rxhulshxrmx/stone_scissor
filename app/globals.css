@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: system-ui, sans-serif;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply px-6 py-3 rounded-lg font-semibold transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2;
+  }
+  
+  .btn-primary {
+    @apply btn bg-primary text-white hover:bg-primary/90 focus:ring-primary;
+  }
+  
+  .btn-secondary {
+    @apply btn bg-gray-200 text-gray-800 hover:bg-gray-300 focus:ring-gray-300;
+  }
+  
+  .btn-success {
+    @apply btn bg-success text-white hover:bg-success/90 focus:ring-success;
+  }
+  
+  .btn-error {
+    @apply btn bg-error text-white hover:bg-error/90 focus:ring-error;
+  }
+  
+  .choice-btn {
+    @apply w-32 h-32 rounded-full border-4 border-gray-300 flex items-center justify-center text-4xl cursor-pointer transition-all duration-200 hover:scale-110 hover:border-primary;
+  }
+  
+  .choice-btn.selected {
+    @apply border-primary bg-primary/10;
+  }
+  
+  .choice-btn.winner {
+    @apply border-success bg-success/10 animate-pulse-fast;
+  }
+  
+  .choice-btn.loser {
+    @apply border-error bg-error/10;
+  }
+  
+  .pulse-waiting {
+    animation: pulse 2s infinite;
+  }
+  
+  @keyframes pulse {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.5;
+    }
+  }
+}
