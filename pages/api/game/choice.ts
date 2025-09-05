@@ -32,6 +32,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     else if (winner === 'player2') room.scores[id2]++
     room.gameState = 'results'
     room.results = { winner, choices: { [id1]: room.choices[id1], [id2]: room.choices[id2] } }
+    room.resultsAt = Date.now()
   }
 
   room.updatedAt = Date.now()

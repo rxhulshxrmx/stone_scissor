@@ -136,27 +136,33 @@ export default function GamePage() {
     return () => clearInterval(interval)
   }, [connectionStatus, roomId, pollRoomStatus])
 
-  // When server signals results, auto-start next round after delay
+  // When server signals results, auto-start next round after ~3s (idempotent)
   useEffect(() => {
     if (!room) return
-    if (room.gameState === 'results') {
-      const timer = setTimeout(async () => {
-        try {
-          await fetch('/api/game/next-round', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ roomId })
-          })
-          setPlayerChoice('')
-          setOpponentChose(false)
-          setShowResults(false)
-          setResults(null)
-        } catch (error) {
-          console.error('Error starting next round:', error)
-        }
-      }, 3000)
-      return () => clearTimeout(timer)
-    }
+    if (room.gameState !== 'results') return
+
+    const now = Date.now()
+    const resultsAt = (room as any).resultsAt as number | undefined
+    const elapsed = resultsAt ? now - resultsAt : 0
+    const delay = Math.max(0, 3000 - elapsed)
+
+    const timer = setTimeout(async () => {
+      try {
+        await fetch('/api/game/next-round', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomId })
+        })
+        setPlayerChoice('')
+        setOpponentChose(false)
+        setShowResults(false)
+        setResults(null)
+      } catch (error) {
+        console.error('Error starting next round:', error)
+      }
+    }, delay)
+
+    return () => clearTimeout(timer)
   }, [room, roomId])
 
   const makeChoice = useCallback(async (choice: string) => {
