@@ -33,15 +33,22 @@ class GameStore {
     const now = Date.now()
     const oneHour = 60 * 60 * 1000
     
-    for (const [roomId, room] of this.rooms.entries()) {
+    const roomsToDelete: string[] = []
+    
+    this.rooms.forEach((room, roomId) => {
       if (now - room.lastActivity > oneHour) {
-        this.rooms.delete(roomId)
+        roomsToDelete.push(roomId)
         // Clean up player mappings
         for (const player of room.players) {
           this.playerRooms.delete(player.id)
         }
       }
-    }
+    })
+    
+    // Delete the rooms
+    roomsToDelete.forEach(roomId => {
+      this.rooms.delete(roomId)
+    })
   }
 
   joinRoom(roomId: string, playerId: string, playerName: string): Room {
