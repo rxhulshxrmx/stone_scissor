@@ -10,6 +10,7 @@ A modern, real-time multiplayer Stone Paper Scissors game built with Next.js, So
 - 🔗 Room-based matchmaking with shareable codes
 - ⚡ Instant result evaluation
 - 📱 Mobile-friendly design
+- 🚀 Vercel-optimized deployment
 
 ## Tech Stack
 
