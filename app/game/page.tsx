@@ -3,26 +3,16 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 
-interface Player {
-  id: string
-  name: string
-  ready: boolean
-}
-
-interface Room {
-  id: string
-  players: Player[]
+interface GameState {
+  roomId: string
+  players: { id: string; name: string; choice?: string; score: number }[]
+  round: number
   gameState: 'waiting' | 'playing' | 'results'
-  choices: Record<string, string>
-  scores: Record<string, number>
-  round: number
-}
-
-interface RoundResults {
-  round: number
-  choices: Record<string, string>
-  winner: 'player1' | 'player2' | 'tie'
-  scores: Record<string, number>
+  results?: {
+    winner: string
+    choices: Record<string, string>
+  }
+  lastUpdate: number
 }
 
 const choiceEmojis = {
@@ -34,164 +24,153 @@ const choiceEmojis = {
 export default function GamePage() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const [room, setRoom] = useState<Room | null>(null)
-  const [playerChoice, setPlayerChoice] = useState<string>('')
-  const [opponentChose, setOpponentChose] = useState(false)
-  const [results, setResults] = useState<RoundResults | null>(null)
-  const [showResults, setShowResults] = useState(false)
-  const [connectionStatus, setConnectionStatus] = useState('connecting')
+  const [gameState, setGameState] = useState<GameState | null>(null)
   const [playerId] = useState(() => Math.random().toString(36).substring(2, 15))
+  const [playerChoice, setPlayerChoice] = useState<string>('')
+  const [showResults, setShowResults] = useState(false)
 
   const roomId = searchParams?.get('room')
   const playerName = searchParams?.get('name')
 
-  // Polling function to get room status
-  const pollRoomStatus = useCallback(async () => {
+  // Get game state from localStorage
+  const getGameState = useCallback((): GameState | null => {
+    if (!roomId) return null
+    const stored = localStorage.getItem(`game_${roomId}`)
+    return stored ? JSON.parse(stored) : null
+  }, [roomId])
+
+  // Save game state to localStorage
+  const saveGameState = useCallback((state: GameState) => {
     if (!roomId) return
+    localStorage.setItem(`game_${roomId}`, JSON.stringify(state))
+    setGameState(state)
+  }, [roomId])
 
-    try {
-      const response = await fetch(`/api/game/status?roomId=${roomId}`)
-      if (response.ok) {
-        const data = await response.json()
-        const newRoom = data.room
-
-        // Check if opponent made a choice
-        if (newRoom.gameState === 'playing') {
-          const choiceCount = Object.keys(newRoom.choices).length
-          const myChoice = newRoom.choices[playerId]
-          
-          if (choiceCount === 1 && !myChoice) {
-            setOpponentChose(true)
-          } else if (choiceCount === 1 && myChoice) {
-            setOpponentChose(false)
-          }
-        }
-
-        setRoom(newRoom)
-        setConnectionStatus('connected')
-      } else {
-        setConnectionStatus('disconnected')
-      }
-    } catch (error) {
-      console.error('Error polling room status:', error)
-      setConnectionStatus('disconnected')
-    }
-  }, [roomId, playerId])
-
-  // Join room on component mount
+  // Initialize or join game
   useEffect(() => {
     if (!roomId || !playerName) {
       router.push('/')
       return
     }
 
-    const joinRoom = async () => {
-      try {
-        const response = await fetch('/api/game/join', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ roomId, playerId, playerName })
+    let currentState = getGameState()
+    
+    if (!currentState) {
+      // Create new game
+      currentState = {
+        roomId,
+        players: [{
+          id: playerId,
+          name: playerName,
+          score: 0
+        }],
+        round: 0,
+        gameState: 'waiting',
+        lastUpdate: Date.now()
+      }
+    } else {
+      // Join existing game
+      const existingPlayer = currentState.players.find(p => p.name === playerName)
+      if (!existingPlayer && currentState.players.length < 2) {
+        currentState.players.push({
+          id: playerId,
+          name: playerName,
+          score: 0
         })
-
-        if (response.ok) {
-          const data = await response.json()
-          setRoom(data.room)
-          setConnectionStatus('connected')
-        } else {
-          setConnectionStatus('disconnected')
-        }
-      } catch (error) {
-        console.error('Error joining room:', error)
-        setConnectionStatus('disconnected')
+        currentState.lastUpdate = Date.now()
+      }
+      
+      // Start game if 2 players
+      if (currentState.players.length === 2 && currentState.gameState === 'waiting') {
+        currentState.gameState = 'playing'
+        currentState.round = 1
+        currentState.lastUpdate = Date.now()
       }
     }
 
-    joinRoom()
-  }, [roomId, playerName, playerId, router])
+    saveGameState(currentState)
+  }, [roomId, playerName, playerId, router, getGameState, saveGameState])
 
-  // Set up polling for room updates
+  // Poll for updates from other player
   useEffect(() => {
-    if (connectionStatus !== 'connected' || !roomId) return
+    if (!roomId) return
 
-    const interval = setInterval(pollRoomStatus, 1000) // Poll every second
+    const interval = setInterval(() => {
+      const currentState = getGameState()
+      if (currentState && currentState.lastUpdate !== gameState?.lastUpdate) {
+        setGameState(currentState)
+        
+        // Check if both players made choices
+        if (currentState.gameState === 'playing' && 
+            currentState.players.length === 2 &&
+            currentState.players.every(p => p.choice)) {
+          
+          // Calculate results
+          const [player1, player2] = currentState.players
+          const winner = getWinner(player1.choice!, player2.choice!)
+          
+          if (winner === player1.name) player1.score++
+          else if (winner === player2.name) player2.score++
+          
+          currentState.results = {
+            winner,
+            choices: {
+              [player1.id]: player1.choice!,
+              [player2.id]: player2.choice!
+            }
+          }
+          currentState.gameState = 'results'
+          currentState.lastUpdate = Date.now()
+          
+          saveGameState(currentState)
+          setShowResults(true)
+          
+          // Reset for next round after 3 seconds
+          setTimeout(() => {
+            currentState.players.forEach(p => { delete p.choice })
+            currentState.round++
+            currentState.gameState = 'playing'
+            delete currentState.results
+            currentState.lastUpdate = Date.now()
+            
+            saveGameState(currentState)
+            setPlayerChoice('')
+            setShowResults(false)
+          }, 3000)
+        }
+      }
+    }, 500) // Poll every 500ms
 
     return () => clearInterval(interval)
-  }, [connectionStatus, roomId, pollRoomStatus])
+  }, [roomId, gameState?.lastUpdate, getGameState, saveGameState])
 
-  // Handle results and next round
-  useEffect(() => {
-    if (!room) return
-
-    if (room.gameState === 'results' && Object.keys(room.choices).length === 2) {
-      const playerIds = room.players.map(p => p.id)
-      const choice1 = room.choices[playerIds[0]]
-      const choice2 = room.choices[playerIds[1]]
-      
-      // Determine winner
-      let winner: 'player1' | 'player2' | 'tie' = 'tie'
-      if (choice1 !== choice2) {
-        if (
-          (choice1 === 'stone' && choice2 === 'scissors') ||
-          (choice1 === 'paper' && choice2 === 'stone') ||
-          (choice1 === 'scissors' && choice2 === 'paper')
-        ) {
-          winner = 'player1'
-        } else {
-          winner = 'player2'
-        }
-      }
-
-      const results: RoundResults = {
-        round: room.round,
-        choices: room.choices,
-        winner,
-        scores: room.scores
-      }
-
-      setResults(results)
-      setShowResults(true)
-      setOpponentChose(false)
-
-      // Auto-start next round after 3 seconds
-      setTimeout(async () => {
-        try {
-          await fetch('/api/game/next-round', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ roomId })
-          })
-          
-          setPlayerChoice('')
-          setOpponentChose(false)
-          setShowResults(false)
-          setResults(null)
-        } catch (error) {
-          console.error('Error starting next round:', error)
-        }
-      }, 3000)
+  const getWinner = (choice1: string, choice2: string): string => {
+    if (choice1 === choice2) return 'tie'
+    if (
+      (choice1 === 'stone' && choice2 === 'scissors') ||
+      (choice1 === 'paper' && choice2 === 'stone') ||
+      (choice1 === 'scissors' && choice2 === 'paper')
+    ) {
+      return gameState?.players.find(p => p.choice === choice1)?.name || 'player1'
     }
-  }, [room, roomId])
+    return gameState?.players.find(p => p.choice === choice2)?.name || 'player2'
+  }
 
-  const makeChoice = useCallback(async (choice: string) => {
-    if (!room || room.gameState !== 'playing' || playerChoice) return
+  const makeChoice = useCallback((choice: string) => {
+    if (!gameState || gameState.gameState !== 'playing' || playerChoice) return
 
     setPlayerChoice(choice)
+    
+    const currentState = getGameState()
+    if (!currentState) return
 
-    try {
-      const response = await fetch('/api/game/choice', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ playerId, choice })
-      })
-
-      if (!response.ok) {
-        setPlayerChoice('') // Reset on error
-      }
-    } catch (error) {
-      console.error('Error making choice:', error)
-      setPlayerChoice('') // Reset on error
+    const myPlayer = currentState.players.find(p => p.name === playerName)
+    if (myPlayer) {
+      myPlayer.choice = choice
+      currentState.lastUpdate = Date.now()
+      saveGameState(currentState)
     }
-  }, [room?.gameState, playerChoice, playerId])
+  }, [gameState, playerChoice, playerName, getGameState, saveGameState])
 
   const copyRoomCode = () => {
     if (roomId) {
@@ -203,42 +182,19 @@ export default function GamePage() {
     router.push('/')
   }
 
-  if (connectionStatus === 'connecting') {
+  if (!gameState) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary mx-auto"></div>
-          <p className="mt-4 text-lg text-gray-600">Connecting to game...</p>
+          <p className="mt-4 text-lg text-gray-600">Loading game...</p>
         </div>
       </div>
     )
   }
 
-  if (connectionStatus === 'disconnected') {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-lg text-red-600 mb-4">Connection lost</p>
-          <button onClick={goHome} className="btn-primary">
-            Go Home
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  if (!room) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-lg text-gray-600">Loading room...</p>
-        </div>
-      </div>
-    )
-  }
-
-  const currentPlayer = room.players.find(p => p.id === playerId)
-  const opponent = room.players.find(p => p.id !== playerId)
+  const currentPlayer = gameState.players.find(p => p.name === playerName)
+  const opponent = gameState.players.find(p => p.name !== playerName)
 
   return (
     <div className="min-h-screen p-4">
@@ -248,7 +204,8 @@ export default function GamePage() {
           <div className="flex justify-between items-center">
             <div>
               <h1 className="text-2xl font-bold text-gray-800">Room: {roomId}</h1>
-              <p className="text-gray-600">Round {room.round || 0}</p>
+              <p className="text-gray-600">Round {gameState.round}</p>
+              <p className="text-xs text-green-600">✅ Always Connected (LocalStorage)</p>
             </div>
             <div className="flex gap-2">
               <button
@@ -268,45 +225,45 @@ export default function GamePage() {
         </div>
 
         {/* Waiting for players */}
-        {room.gameState === 'waiting' && (
+        {gameState.gameState === 'waiting' && (
           <div className="bg-white rounded-2xl shadow-lg p-8 text-center">
             <h2 className="text-2xl font-bold text-gray-800 mb-4">
-              {room.players.length === 1 ? 'Waiting for opponent...' : 'Get ready!'}
+              {gameState.players.length === 1 ? 'Waiting for opponent...' : 'Get ready!'}
             </h2>
             <div className="space-y-4">
-              {room.players.map((player, index) => (
+              {gameState.players.map((player) => (
                 <div key={player.id} className="flex items-center justify-center gap-4">
                   <div className="w-4 h-4 bg-green-500 rounded-full"></div>
                   <span className="text-lg">{player.name}</span>
-                  {player.id === playerId && <span className="text-sm text-gray-500">(You)</span>}
+                  {player.name === playerName && <span className="text-sm text-gray-500">(You)</span>}
                 </div>
               ))}
-              {room.players.length === 1 && (
+              {gameState.players.length === 1 && (
                 <div className="flex items-center justify-center gap-4 opacity-50">
                   <div className="w-4 h-4 bg-gray-300 rounded-full pulse-waiting"></div>
                   <span className="text-lg text-gray-500">Waiting for player...</span>
                 </div>
               )}
             </div>
-            {room.players.length === 1 && (
+            {gameState.players.length === 1 && (
               <p className="mt-6 text-gray-600">Share room code <strong>{roomId}</strong> with a friend!</p>
             )}
           </div>
         )}
 
         {/* Game playing */}
-        {room.gameState === 'playing' && !showResults && (
+        {gameState.gameState === 'playing' && !showResults && (
           <div className="space-y-6">
             {/* Scores */}
             <div className="bg-white rounded-2xl shadow-lg p-6">
               <div className="grid grid-cols-2 gap-4 text-center">
                 <div>
                   <h3 className="text-lg font-semibold text-gray-800">{currentPlayer?.name} (You)</h3>
-                  <p className="text-3xl font-bold text-primary">{room.scores[playerId] || 0}</p>
+                  <p className="text-3xl font-bold text-primary">{currentPlayer?.score || 0}</p>
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-gray-800">{opponent?.name || 'Opponent'}</h3>
-                  <p className="text-3xl font-bold text-secondary">{room.scores[opponent?.id || ''] || 0}</p>
+                  <h3 className="text-lg font-semibold text-gray-800">{opponent?.name || 'Waiting...'}</h3>
+                  <p className="text-3xl font-bold text-secondary">{opponent?.score || 0}</p>
                 </div>
               </div>
             </div>
@@ -338,12 +295,12 @@ export default function GamePage() {
                     You chose: {choiceEmojis[playerChoice as keyof typeof choiceEmojis]}
                   </p>
                 )}
-                {opponentChose && (
+                {opponent?.choice && (
                   <p className="text-blue-600 font-semibold">
-                    Opponent has made their choice!
+                    {opponent.name} has made their choice!
                   </p>
                 )}
-                {playerChoice && opponentChose && (
+                {playerChoice && opponent?.choice && (
                   <p className="text-gray-600 animate-pulse">
                     Revealing results...
                   </p>
@@ -354,19 +311,18 @@ export default function GamePage() {
         )}
 
         {/* Results */}
-        {showResults && results && (
+        {showResults && gameState.results && (
           <div className="bg-white rounded-2xl shadow-lg p-8 text-center">
-            <h2 className="text-2xl font-bold text-gray-800 mb-6">Round {results.round} Results</h2>
+            <h2 className="text-2xl font-bold text-gray-800 mb-6">Round {gameState.round} Results</h2>
             
             <div className="flex justify-center items-center gap-12 mb-8">
               <div className="text-center">
                 <h3 className="text-lg font-semibold text-gray-800 mb-2">{currentPlayer?.name}</h3>
                 <div className={`choice-btn text-6xl ${
-                  results.winner === 'player1' && room.players[0]?.id === playerId ? 'winner' :
-                  results.winner === 'player2' && room.players[1]?.id === playerId ? 'winner' :
-                  results.winner === 'tie' ? '' : 'loser'
+                  gameState.results.winner === currentPlayer?.name ? 'winner' :
+                  gameState.results.winner === 'tie' ? '' : 'loser'
                 }`}>
-                  {choiceEmojis[results.choices[playerId] as keyof typeof choiceEmojis]}
+                  {choiceEmojis[gameState.results.choices[currentPlayer?.id || ''] as keyof typeof choiceEmojis]}
                 </div>
               </div>
               
@@ -375,24 +331,20 @@ export default function GamePage() {
               <div className="text-center">
                 <h3 className="text-lg font-semibold text-gray-800 mb-2">{opponent?.name}</h3>
                 <div className={`choice-btn text-6xl ${
-                  results.winner === 'player1' && room.players[0]?.id === opponent?.id ? 'winner' :
-                  results.winner === 'player2' && room.players[1]?.id === opponent?.id ? 'winner' :
-                  results.winner === 'tie' ? '' : 'loser'
+                  gameState.results.winner === opponent?.name ? 'winner' :
+                  gameState.results.winner === 'tie' ? '' : 'loser'
                 }`}>
-                  {choiceEmojis[results.choices[opponent?.id || ''] as keyof typeof choiceEmojis]}
+                  {choiceEmojis[gameState.results.choices[opponent?.id || ''] as keyof typeof choiceEmojis]}
                 </div>
               </div>
             </div>
 
             <div className="mb-6">
-              {results.winner === 'tie' ? (
+              {gameState.results.winner === 'tie' ? (
                 <p className="text-2xl font-bold text-yellow-600">It's a tie!</p>
               ) : (
                 <p className="text-2xl font-bold text-green-600">
-                  {results.winner === 'player1' 
-                    ? (room.players[0]?.id === playerId ? 'You win!' : `${room.players[0]?.name} wins!`)
-                    : (room.players[1]?.id === playerId ? 'You win!' : `${room.players[1]?.name} wins!`)
-                  }
+                  {gameState.results.winner === currentPlayer?.name ? 'You win!' : `${gameState.results.winner} wins!`}
                 </p>
               )}
             </div>
@@ -400,11 +352,11 @@ export default function GamePage() {
             <div className="grid grid-cols-2 gap-4 text-center">
               <div>
                 <h4 className="text-lg font-semibold text-gray-800">{currentPlayer?.name}</h4>
-                <p className="text-2xl font-bold text-primary">{results.scores[playerId] || 0}</p>
+                <p className="text-2xl font-bold text-primary">{currentPlayer?.score || 0}</p>
               </div>
               <div>
                 <h4 className="text-lg font-semibold text-gray-800">{opponent?.name}</h4>
-                <p className="text-2xl font-bold text-secondary">{results.scores[opponent?.id || ''] || 0}</p>
+                <p className="text-2xl font-bold text-secondary">{opponent?.score || 0}</p>
               </div>
             </div>
 
