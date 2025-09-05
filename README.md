@@ -74,7 +74,14 @@ npm run dev
    - Import your repository
    - Vercel will automatically detect the Next.js configuration
 
-3. The app will be deployed with real-time Socket.IO functionality working out of the box.
+3. Add Upstash Redis environment variables in Vercel Project Settings → Environment Variables:
+
+   - UPSTASH_REDIS_REST_URL
+   - UPSTASH_REDIS_REST_TOKEN
+
+   You can create a free Redis database at Upstash and copy these values.
+
+4. The app will be deployed with durable multiplayer state via Redis.
 
 ### Environment Variables
 
