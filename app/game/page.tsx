@@ -52,59 +52,74 @@ export default function GamePage() {
       return
     }
 
-    const newSocket = io()
-    setSocket(newSocket)
+    // Initialize socket connection
+    const socketInitializer = async () => {
+      await fetch('/api/socket')
+      const newSocket = io({
+        path: '/api/socket',
+        addTrailingSlash: false,
+      })
+      setSocket(newSocket)
 
-    newSocket.on('connect', () => {
-      setConnectionStatus('connected')
-      newSocket.emit('join-room', roomId, playerName)
-    })
+      newSocket.on('connect', () => {
+        setConnectionStatus('connected')
+        newSocket.emit('join-room', roomId, playerName)
+      })
 
-    newSocket.on('disconnect', () => {
-      setConnectionStatus('disconnected')
-    })
+      newSocket.on('disconnect', () => {
+        setConnectionStatus('disconnected')
+      })
 
-    newSocket.on('room-update', (updatedRoom: Room) => {
-      setRoom(updatedRoom)
-    })
+      newSocket.on('room-update', (updatedRoom: Room) => {
+        setRoom(updatedRoom)
+      })
 
-    newSocket.on('game-start', (gameRoom: Room) => {
-      setRoom(gameRoom)
-      setPlayerChoice('')
-      setOpponentChose(false)
-      setShowResults(false)
-      setResults(null)
-    })
+      newSocket.on('game-start', (gameRoom: Room) => {
+        setRoom(gameRoom)
+        setPlayerChoice('')
+        setOpponentChose(false)
+        setShowResults(false)
+        setResults(null)
+      })
 
-    newSocket.on('player-chose', () => {
-      setOpponentChose(true)
-    })
+      newSocket.on('player-chose', () => {
+        setOpponentChose(true)
+      })
 
-    newSocket.on('round-results', (roundResults: RoundResults) => {
-      setResults(roundResults)
-      setShowResults(true)
-      setOpponentChose(false)
-    })
+      newSocket.on('round-results', (roundResults: RoundResults) => {
+        setResults(roundResults)
+        setShowResults(true)
+        setOpponentChose(false)
+      })
 
-    newSocket.on('next-round', (gameRoom: Room) => {
-      setRoom(gameRoom)
-      setPlayerChoice('')
-      setOpponentChose(false)
-      setShowResults(false)
-      setResults(null)
-    })
+      newSocket.on('next-round', (gameRoom: Room) => {
+        setRoom(gameRoom)
+        setPlayerChoice('')
+        setOpponentChose(false)
+        setShowResults(false)
+        setResults(null)
+      })
 
-    newSocket.on('player-left', (updatedRoom: Room) => {
-      setRoom(updatedRoom)
-      setPlayerChoice('')
-      setOpponentChose(false)
-      setShowResults(false)
-      setResults(null)
-    })
+      newSocket.on('player-left', (updatedRoom: Room) => {
+        setRoom(updatedRoom)
+        setPlayerChoice('')
+        setOpponentChose(false)
+        setShowResults(false)
+        setResults(null)
+      })
 
-    return () => {
-      newSocket.close()
+      return newSocket
     }
+
+    let cleanup: (() => void) | undefined
+
+    socketInitializer().then((newSocket) => {
+      cleanup = () => {
+        newSocket.close()
+      }
+    })
+
+    return cleanup
   }, [roomId, playerName, router])
 
   const makeChoice = useCallback((choice: string) => {
