@@ -43,8 +43,8 @@ export default function GamePage() {
   const [showResults, setShowResults] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState('connecting')
 
-  const roomId = searchParams.get('room')
-  const playerName = searchParams.get('name')
+  const roomId = searchParams?.get('room')
+  const playerName = searchParams?.get('name')
 
   useEffect(() => {
     if (!roomId || !playerName) {
