@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { io, Socket } from 'socket.io-client'
 
 interface Player {
   id: string
@@ -34,164 +35,99 @@ const choiceEmojis = {
 export default function GamePage() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const [socket, setSocket] = useState<Socket | null>(null)
   const [room, setRoom] = useState<Room | null>(null)
   const [playerChoice, setPlayerChoice] = useState<string>('')
   const [opponentChose, setOpponentChose] = useState(false)
   const [results, setResults] = useState<RoundResults | null>(null)
   const [showResults, setShowResults] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState('connecting')
-  const [playerId] = useState(() => Math.random().toString(36).substring(2, 15))
 
   const roomId = searchParams?.get('room')
   const playerName = searchParams?.get('name')
 
-  // Polling function to get room status
-  const pollRoomStatus = useCallback(async () => {
-    if (!roomId) return
-
-    try {
-      const response = await fetch(`/api/game/status?roomId=${roomId}`)
-      if (response.ok) {
-        const data = await response.json()
-        const newRoom = data.room
-
-        // Check if opponent made a choice
-        if (newRoom.gameState === 'playing') {
-          const choiceCount = Object.keys(newRoom.choices).length
-          const myChoice = newRoom.choices[playerId]
-          
-          if (choiceCount === 1 && !myChoice) {
-            setOpponentChose(true)
-          } else if (choiceCount === 1 && myChoice) {
-            setOpponentChose(false)
-          }
-        }
-
-        setRoom(newRoom)
-        setConnectionStatus('connected')
-      } else {
-        setConnectionStatus('disconnected')
-      }
-    } catch (error) {
-      console.error('Error polling room status:', error)
-      setConnectionStatus('disconnected')
-    }
-  }, [roomId, playerId])
-
-  // Join room on component mount
   useEffect(() => {
     if (!roomId || !playerName) {
       router.push('/')
       return
     }
 
-    const joinRoom = async () => {
-      try {
-        const response = await fetch('/api/game/join', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ roomId, playerId, playerName })
-        })
+    // Initialize socket connection
+    const socketInitializer = async () => {
+      await fetch('/api/socket')
+      const newSocket = io({
+        path: '/api/socket',
+        addTrailingSlash: false,
+      })
+      setSocket(newSocket)
 
-        if (response.ok) {
-          const data = await response.json()
-          setRoom(data.room)
-          setConnectionStatus('connected')
-        } else {
-          setConnectionStatus('disconnected')
-        }
-      } catch (error) {
-        console.error('Error joining room:', error)
-        setConnectionStatus('disconnected')
-      }
-    }
-
-    joinRoom()
-  }, [roomId, playerName, playerId, router])
-
-  // Set up polling for room updates
-  useEffect(() => {
-    if (connectionStatus !== 'connected' || !roomId) return
-
-    const interval = setInterval(pollRoomStatus, 1000) // Poll every second
-
-    return () => clearInterval(interval)
-  }, [connectionStatus, roomId, pollRoomStatus])
-
-  // Handle results and next round
-  useEffect(() => {
-    if (!room) return
-
-    if (room.gameState === 'results' && Object.keys(room.choices).length === 2) {
-      const playerIds = room.players.map(p => p.id)
-      const choice1 = room.choices[playerIds[0]]
-      const choice2 = room.choices[playerIds[1]]
-      
-      // Determine winner
-      let winner: 'player1' | 'player2' | 'tie' = 'tie'
-      if (choice1 !== choice2) {
-        if (
-          (choice1 === 'stone' && choice2 === 'scissors') ||
-          (choice1 === 'paper' && choice2 === 'stone') ||
-          (choice1 === 'scissors' && choice2 === 'paper')
-        ) {
-          winner = 'player1'
-        } else {
-          winner = 'player2'
-        }
-      }
-
-      const results: RoundResults = {
-        round: room.round,
-        choices: room.choices,
-        winner,
-        scores: room.scores
-      }
-
-      setResults(results)
-      setShowResults(true)
-      setOpponentChose(false)
-
-      // Auto-start next round after 3 seconds
-      setTimeout(async () => {
-        try {
-          await fetch('/api/game/next-round', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ roomId })
-          })
-          
-          setPlayerChoice('')
-          setOpponentChose(false)
-          setShowResults(false)
-          setResults(null)
-        } catch (error) {
-          console.error('Error starting next round:', error)
-        }
-      }, 3000)
-    }
-  }, [room, roomId])
-
-  const makeChoice = useCallback(async (choice: string) => {
-    if (!room || room.gameState !== 'playing' || playerChoice) return
-
-    setPlayerChoice(choice)
-
-    try {
-      const response = await fetch('/api/game/choice', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ playerId, choice })
+      newSocket.on('connect', () => {
+        setConnectionStatus('connected')
+        newSocket.emit('join-room', roomId, playerName)
       })
 
-      if (!response.ok) {
-        setPlayerChoice('') // Reset on error
-      }
-    } catch (error) {
-      console.error('Error making choice:', error)
-      setPlayerChoice('') // Reset on error
+      newSocket.on('disconnect', () => {
+        setConnectionStatus('disconnected')
+      })
+
+      newSocket.on('room-update', (updatedRoom: Room) => {
+        setRoom(updatedRoom)
+      })
+
+      newSocket.on('game-start', (gameRoom: Room) => {
+        setRoom(gameRoom)
+        setPlayerChoice('')
+        setOpponentChose(false)
+        setShowResults(false)
+        setResults(null)
+      })
+
+      newSocket.on('player-chose', () => {
+        setOpponentChose(true)
+      })
+
+      newSocket.on('round-results', (roundResults: RoundResults) => {
+        setResults(roundResults)
+        setShowResults(true)
+        setOpponentChose(false)
+      })
+
+      newSocket.on('next-round', (gameRoom: Room) => {
+        setRoom(gameRoom)
+        setPlayerChoice('')
+        setOpponentChose(false)
+        setShowResults(false)
+        setResults(null)
+      })
+
+      newSocket.on('player-left', (updatedRoom: Room) => {
+        setRoom(updatedRoom)
+        setPlayerChoice('')
+        setOpponentChose(false)
+        setShowResults(false)
+        setResults(null)
+      })
+
+      return newSocket
     }
-  }, [room?.gameState, playerChoice, playerId])
+
+    let cleanup: (() => void) | undefined
+
+    socketInitializer().then((newSocket) => {
+      cleanup = () => {
+        newSocket.close()
+      }
+    })
+
+    return cleanup
+  }, [roomId, playerName, router])
+
+  const makeChoice = useCallback((choice: string) => {
+    if (socket && room?.gameState === 'playing' && !playerChoice) {
+      setPlayerChoice(choice)
+      socket.emit('make-choice', choice)
+    }
+  }, [socket, room?.gameState, playerChoice])
 
   const copyRoomCode = () => {
     if (roomId) {
@@ -237,8 +173,8 @@ export default function GamePage() {
     )
   }
 
-  const currentPlayer = room.players.find(p => p.id === playerId)
-  const opponent = room.players.find(p => p.id !== playerId)
+  const currentPlayer = room.players.find(p => p.name === playerName)
+  const opponent = room.players.find(p => p.name !== playerName)
 
   return (
     <div className="min-h-screen p-4">
@@ -278,7 +214,7 @@ export default function GamePage() {
                 <div key={player.id} className="flex items-center justify-center gap-4">
                   <div className="w-4 h-4 bg-green-500 rounded-full"></div>
                   <span className="text-lg">{player.name}</span>
-                  {player.id === playerId && <span className="text-sm text-gray-500">(You)</span>}
+                  {player.name === playerName && <span className="text-sm text-gray-500">(You)</span>}
                 </div>
               ))}
               {room.players.length === 1 && (
@@ -302,7 +238,7 @@ export default function GamePage() {
               <div className="grid grid-cols-2 gap-4 text-center">
                 <div>
                   <h3 className="text-lg font-semibold text-gray-800">{currentPlayer?.name} (You)</h3>
-                  <p className="text-3xl font-bold text-primary">{room.scores[playerId] || 0}</p>
+                  <p className="text-3xl font-bold text-primary">{room.scores[currentPlayer?.id || ''] || 0}</p>
                 </div>
                 <div>
                   <h3 className="text-lg font-semibold text-gray-800">{opponent?.name || 'Opponent'}</h3>
@@ -362,11 +298,11 @@ export default function GamePage() {
               <div className="text-center">
                 <h3 className="text-lg font-semibold text-gray-800 mb-2">{currentPlayer?.name}</h3>
                 <div className={`choice-btn text-6xl ${
-                  results.winner === 'player1' && room.players[0]?.id === playerId ? 'winner' :
-                  results.winner === 'player2' && room.players[1]?.id === playerId ? 'winner' :
+                  results.winner === 'player1' && room.players[0]?.id === currentPlayer?.id ? 'winner' :
+                  results.winner === 'player2' && room.players[1]?.id === currentPlayer?.id ? 'winner' :
                   results.winner === 'tie' ? '' : 'loser'
                 }`}>
-                  {choiceEmojis[results.choices[playerId] as keyof typeof choiceEmojis]}
+                  {choiceEmojis[results.choices[currentPlayer?.id || ''] as keyof typeof choiceEmojis]}
                 </div>
               </div>
               
@@ -390,8 +326,8 @@ export default function GamePage() {
               ) : (
                 <p className="text-2xl font-bold text-green-600">
                   {results.winner === 'player1' 
-                    ? (room.players[0]?.id === playerId ? 'You win!' : `${room.players[0]?.name} wins!`)
-                    : (room.players[1]?.id === playerId ? 'You win!' : `${room.players[1]?.name} wins!`)
+                    ? (room.players[0]?.id === currentPlayer?.id ? 'You win!' : `${room.players[0]?.name} wins!`)
+                    : (room.players[1]?.id === currentPlayer?.id ? 'You win!' : `${room.players[1]?.name} wins!`)
                   }
                 </p>
               )}
@@ -400,7 +336,7 @@ export default function GamePage() {
             <div className="grid grid-cols-2 gap-4 text-center">
               <div>
                 <h4 className="text-lg font-semibold text-gray-800">{currentPlayer?.name}</h4>
-                <p className="text-2xl font-bold text-primary">{results.scores[playerId] || 0}</p>
+                <p className="text-2xl font-bold text-primary">{results.scores[currentPlayer?.id || ''] || 0}</p>
               </div>
               <div>
                 <h4 className="text-lg font-semibold text-gray-800">{opponent?.name}</h4>
